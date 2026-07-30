@@ -29,34 +29,29 @@ subprojects {
         isPreserveFileTimestamps = false
         isReproducibleFileOrder = true
     }
+
     tasks.withType<JavaCompile>().configureEach {
         options.encoding = Charsets.UTF_8.name()
         options.release = 21
         options.isFork = true
-        options.compilerArgs.addAll(listOf("-Xlint:-deprecation", "-Xlint:-removal"))
+        options.compilerArgs.addAll(
+            listOf("-Xlint:-deprecation", "-Xlint:-removal")
+        )
     }
+
     tasks.withType<Javadoc>().configureEach {
         options.encoding = Charsets.UTF_8.name()
     }
+
     tasks.withType<ProcessResources>().configureEach {
         filteringCharset = Charsets.UTF_8.name()
     }
+
     tasks.withType<Test>().configureEach {
         testLogging {
             showStackTraces = true
             exceptionFormat = TestExceptionFormat.FULL
             events(TestLogEvent.STANDARD_OUT)
-        }
-    }
-
-    extensions.configure<PublishingExtension> {
-        repositories {
-            maven(leafMavenPublicUrl) {
-                name = "leaf"
-
-                credentials.username = System.getenv("REPO_USER")
-                credentials.password = System.getenv("REPO_PASSWORD")
-            }
         }
     }
 }
@@ -70,11 +65,13 @@ paperweight {
             outputFile = file("leaf-server/build.gradle.kts")
             patchFile = file("leaf-server/build.gradle.kts.patch")
         }
+
         patchFile {
             path = "paper-api/build.gradle.kts"
             outputFile = file("leaf-api/build.gradle.kts")
             patchFile = file("leaf-api/build.gradle.kts.patch")
         }
+
         patchDir("paperApi") {
             upstreamPath = "paper-api"
             excludes = setOf("build.gradle.kts")
