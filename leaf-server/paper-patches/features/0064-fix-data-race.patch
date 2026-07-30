@@ -1,0 +1,215 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: zyr1xx <nadejdinkostya@gmail.com>
+Date: Fri, 31 Jul 2026 01:58:25 +0300
+Subject: [PATCH] fix: data race
+
+
+diff --git a/src/ru/lewis/point/service/DatabaseServiceImpl.java b/src/ru/lewis/point/service/DatabaseServiceImpl.java
+index 38c556e4b49d0c10e76da1469323348501ff3236..6b4031206f69a6c7ad2ce25640f8e76ad90411ce 100644
+--- a/src/ru/lewis/point/service/DatabaseServiceImpl.java
++++ b/src/ru/lewis/point/service/DatabaseServiceImpl.java
+@@ -7,30 +7,51 @@ import ru.lewis.point.CompositeClassLoader;
+ import ru.lewis.point.SessionFactoryBuilder;
+ import ru.lewis.point.api.DatabaseService;
+ 
+-import java.util.*;
++import java.util.ArrayList;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Set;
+ import java.util.concurrent.CompletableFuture;
+ import java.util.concurrent.TimeUnit;
+ 
+ public class DatabaseServiceImpl implements DatabaseService {
++
+     private final List<Class<?>> entities = new ArrayList<>();
+     private final Set<ClassLoader> classLoaders = new HashSet<>();
+ 
+-    private SessionFactory sessionFactory;
++    private CompletableFuture<SessionFactory> sessionFactoryFuture;
+ 
+     @Override
+-    public CompletableFuture<Void> init() {
+-        return CompletableFuture.runAsync(() -> sessionFactory = connect());
++    public synchronized CompletableFuture<Void> init() {
++        if (sessionFactoryFuture != null) {
++            return sessionFactoryFuture.thenApply(ignored -> null);
++        }
++
++        // Фиксируем entities/classLoaders до запуска async.
++        List<Class<?>> entitiesSnapshot = List.copyOf(entities);
++        Set<ClassLoader> classLoadersSnapshot = Set.copyOf(classLoaders);
++
++        sessionFactoryFuture = CompletableFuture.supplyAsync(
++            () -> connect(entitiesSnapshot, classLoadersSnapshot)
++        );
++
++        return sessionFactoryFuture.thenApply(ignored -> null);
+     }
+ 
+     @Override
+-    public DatabaseServiceImpl registerEntity(Class<?> entity) {
++    public synchronized DatabaseServiceImpl registerEntity(Class<?> entity) {
++        checkNotInitialized();
++
+         entities.add(entity);
+-        this.classLoaders.add(entity.getClassLoader());
++        classLoaders.add(entity.getClassLoader());
++
+         return this;
+     }
+ 
+     @Override
+-    public DatabaseService registerEntities(Class<?>... entities) {
++    public synchronized DatabaseService registerEntities(Class<?>... entities) {
++        checkNotInitialized();
++
+         for (Class<?> entity : entities) {
+             this.entities.add(entity);
+             this.classLoaders.add(entity.getClassLoader());
+@@ -41,10 +62,26 @@ public class DatabaseServiceImpl implements DatabaseService {
+ 
+     @Override
+     public SessionFactory getSessionFactory() {
+-        return sessionFactory;
++        CompletableFuture<SessionFactory> future;
++
++        synchronized (this) {
++            future = sessionFactoryFuture;
++        }
++
++        if (future == null) {
++            throw new IllegalStateException(
++                "Database has not been initialized yet. Call init() first."
++            );
++        }
++
++        // Ждём завершения подключения, если оно ещё идёт.
++        return future.join();
+     }
+ 
+-    private SessionFactory connect() {
++    private SessionFactory connect(
++        List<Class<?>> entities,
++        Set<ClassLoader> classLoaders
++    ) {
+         CompositeClassLoader classLoader = new CompositeClassLoader(
+             this.getClass().getClassLoader(),
+             new ArrayList<>(classLoaders)
+@@ -87,13 +124,28 @@ public class DatabaseServiceImpl implements DatabaseService {
+     }
+ 
+     private String parametersToString(List<String> parameters) {
++        if (parameters == null || parameters.isEmpty()) {
++            return "";
++        }
++
+         StringBuilder sb = new StringBuilder("?");
++
+         for (int i = 0; i < parameters.size(); i++) {
+             if (i > 0) {
+                 sb.append("&");
+             }
++
+             sb.append(parameters.get(i));
+         }
++
+         return sb.toString();
+     }
++
++    private synchronized void checkNotInitialized() {
++        if (sessionFactoryFuture != null) {
++            throw new IllegalStateException(
++                "Cannot register entities after database initialization has started."
++            );
++        }
++    }
+ }
+diff --git a/src/ru/lewis/point/service/RedisServiceImpl.java b/src/ru/lewis/point/service/RedisServiceImpl.java
+index b6540528a4d039a3ae33f33a6ae4a881b1478d48..30675b12757ba0d204e2fecab1c7210c67d77673 100644
+--- a/src/ru/lewis/point/service/RedisServiceImpl.java
++++ b/src/ru/lewis/point/service/RedisServiceImpl.java
+@@ -11,46 +11,57 @@ import java.util.concurrent.CompletableFuture;
+ import java.util.concurrent.atomic.AtomicReference;
+ 
+ public class RedisServiceImpl implements RedisService {
+-    private AtomicReference<RedissonClient> client;
++
++    private final AtomicReference<RedissonClient> client = new AtomicReference<>();
+ 
+     @Override
+     public RedissonClient getClient() {
+-        return client.get();
+-    }
++        RedissonClient current = client.get();
++
++        if (current == null) {
++            throw new IllegalStateException("Redis client is not initialized yet!");
++        }
+ 
++        return current;
++    }
+ 
+     public CompletableFuture<Void> init() {
+         return CompletableFuture.runAsync(() -> {
+-            RedissonClient createClient = createClient();
+-            client.set(createClient);
++            RedissonClient created = createClient();
++            client.set(created);
+         });
+     }
+ 
+     private RedissonClient createClient() {
+-            Config config = new Config();
+-            config.setUseThreadClassLoader(false);
+-
+-            SingleServerConfig singleServerConfig = config.useSingleServer()
+-                .setAddress("redis://" + DataRedis.dataDatabaseAddress)
+-                .setDatabase(0)
+-                .setConnectionMinimumIdleSize(5)
+-                .setConnectionPoolSize(10)
+-                .setTimeout(3000)
+-                .setDnsMonitoringInterval(-1);
+-
+-            if (DataRedis.dataDatabasePassword != null && !DataRedis.dataDatabasePassword.isEmpty()) {
+-                singleServerConfig.setPassword(DataRedis.dataDatabasePassword);
+-            }
+-            if (DataRedis.dataDatabaseUser != null && !DataRedis.dataDatabaseUser.isEmpty()) {
+-                singleServerConfig.setUsername(DataRedis.dataDatabaseUser);
+-            }
+-
+-            return Redisson.create(config);
++        Config config = new Config();
++        config.setUseThreadClassLoader(false);
++
++        SingleServerConfig singleServerConfig = config.useSingleServer()
++            .setAddress("redis://" + DataRedis.dataDatabaseAddress)
++            .setDatabase(0)
++            .setConnectionMinimumIdleSize(5)
++            .setConnectionPoolSize(10)
++            .setTimeout(3000)
++            .setDnsMonitoringInterval(-1);
++
++        if (DataRedis.dataDatabasePassword != null
++            && !DataRedis.dataDatabasePassword.isEmpty()) {
++            singleServerConfig.setPassword(DataRedis.dataDatabasePassword);
++        }
++
++        if (DataRedis.dataDatabaseUser != null
++            && !DataRedis.dataDatabaseUser.isEmpty()) {
++            singleServerConfig.setUsername(DataRedis.dataDatabaseUser);
++        }
++
++        return Redisson.create(config);
+     }
+ 
+     public void shutdown() {
+-        if (getClient() != null) {
+-            getClient().shutdown();
++        RedissonClient current = client.getAndSet(null);
++
++        if (current != null) {
++            current.shutdown();
+         }
+     }
+ }

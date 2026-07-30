@@ -7,30 +7,51 @@ import ru.lewis.point.CompositeClassLoader;
 import ru.lewis.point.SessionFactoryBuilder;
 import ru.lewis.point.api.DatabaseService;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 public class DatabaseServiceImpl implements DatabaseService {
+
     private final List<Class<?>> entities = new ArrayList<>();
     private final Set<ClassLoader> classLoaders = new HashSet<>();
 
-    private SessionFactory sessionFactory;
+    private CompletableFuture<SessionFactory> sessionFactoryFuture;
 
     @Override
-    public CompletableFuture<Void> init() {
-        return CompletableFuture.runAsync(() -> sessionFactory = connect());
+    public synchronized CompletableFuture<Void> init() {
+        if (sessionFactoryFuture != null) {
+            return sessionFactoryFuture.thenApply(ignored -> null);
+        }
+
+        // Фиксируем entities/classLoaders до запуска async.
+        List<Class<?>> entitiesSnapshot = List.copyOf(entities);
+        Set<ClassLoader> classLoadersSnapshot = Set.copyOf(classLoaders);
+
+        sessionFactoryFuture = CompletableFuture.supplyAsync(
+            () -> connect(entitiesSnapshot, classLoadersSnapshot)
+        );
+
+        return sessionFactoryFuture.thenApply(ignored -> null);
     }
 
     @Override
-    public DatabaseServiceImpl registerEntity(Class<?> entity) {
+    public synchronized DatabaseServiceImpl registerEntity(Class<?> entity) {
+        checkNotInitialized();
+
         entities.add(entity);
-        this.classLoaders.add(entity.getClassLoader());
+        classLoaders.add(entity.getClassLoader());
+
         return this;
     }
 
     @Override
-    public DatabaseService registerEntities(Class<?>... entities) {
+    public synchronized DatabaseService registerEntities(Class<?>... entities) {
+        checkNotInitialized();
+
         for (Class<?> entity : entities) {
             this.entities.add(entity);
             this.classLoaders.add(entity.getClassLoader());
@@ -41,10 +62,26 @@ public class DatabaseServiceImpl implements DatabaseService {
 
     @Override
     public SessionFactory getSessionFactory() {
-        return sessionFactory;
+        CompletableFuture<SessionFactory> future;
+
+        synchronized (this) {
+            future = sessionFactoryFuture;
+        }
+
+        if (future == null) {
+            throw new IllegalStateException(
+                "Database has not been initialized yet. Call init() first."
+            );
+        }
+
+        // Ждём завершения подключения, если оно ещё идёт.
+        return future.join();
     }
 
-    private SessionFactory connect() {
+    private SessionFactory connect(
+        List<Class<?>> entities,
+        Set<ClassLoader> classLoaders
+    ) {
         CompositeClassLoader classLoader = new CompositeClassLoader(
             this.getClass().getClassLoader(),
             new ArrayList<>(classLoaders)
@@ -87,13 +124,28 @@ public class DatabaseServiceImpl implements DatabaseService {
     }
 
     private String parametersToString(List<String> parameters) {
+        if (parameters == null || parameters.isEmpty()) {
+            return "";
+        }
+
         StringBuilder sb = new StringBuilder("?");
+
         for (int i = 0; i < parameters.size(); i++) {
             if (i > 0) {
                 sb.append("&");
             }
+
             sb.append(parameters.get(i));
         }
+
         return sb.toString();
+    }
+
+    private synchronized void checkNotInitialized() {
+        if (sessionFactoryFuture != null) {
+            throw new IllegalStateException(
+                "Cannot register entities after database initialization has started."
+            );
+        }
     }
 }
