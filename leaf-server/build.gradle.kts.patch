@@ -65,12 +65,18 @@
  configurations.named(log4jPlugins.compileClasspathConfigurationName) {
      extendsFrom(configurations.compileClasspath.get())
  }
-@@ -129,10 +_,20 @@
+@@ -129,10 +_,26 @@
  }
  
  dependencies {
 -    implementation(project(":paper-api"))
 +    implementation(project(":leaf-api")) // Leaf - project setup
++
++    implementation(libs.hibernate.hikari)
++    implementation(libs.hibernate.core)
++    implementation(libs.mariadb)
++    implementation(libs.redisson)
++    implementation(libs.kryo)
 +
 +    // Leaf start - Libraries
 +    implementation("com.github.thatsmusic99:ConfigurationMaster-API:v2.0.0-rc.3") { // Leaf config

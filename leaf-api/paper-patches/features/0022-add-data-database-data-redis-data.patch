@@ -1,0 +1,76 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: zyr1xx <nadejdinkostya@gmail.com>
+Date: Fri, 31 Jul 2026 00:07:38 +0300
+Subject: [PATCH] add: data & database data & redis data
+
+
+diff --git a/src/main/java/ru/lewis/point/api/DatabaseService.java b/src/main/java/ru/lewis/point/api/DatabaseService.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..39e19650a48e37602ea4253d4efbabea95b1f442
+--- /dev/null
++++ b/src/main/java/ru/lewis/point/api/DatabaseService.java
+@@ -0,0 +1,12 @@
++package ru.lewis.point.api;
++
++import org.hibernate.SessionFactory;
++
++import java.util.concurrent.CompletableFuture;
++
++public interface DatabaseService {
++    SessionFactory getSessionFactory();
++    DatabaseService registerEntity(Class<?> entity);
++    DatabaseService registerEntities(Class<?>... entities);
++    CompletableFuture<Void> init();
++}
+diff --git a/src/main/java/ru/lewis/point/api/PointAPI.java b/src/main/java/ru/lewis/point/api/PointAPI.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..143804982062e856d93bef96ddde6392511daa6b
+--- /dev/null
++++ b/src/main/java/ru/lewis/point/api/PointAPI.java
+@@ -0,0 +1,30 @@
++package ru.lewis.point.api;
++
++public class PointAPI {
++    private static PointAPI INSTANCE;
++
++    public static PointAPI get() {
++        return INSTANCE;
++    }
++
++    public static void init(DatabaseService databaseService, RedisService redisService) {
++        if (INSTANCE != null) return;
++        INSTANCE = new PointAPI(databaseService, redisService);
++    }
++
++    private final DatabaseService databaseService;
++    private final RedisService redisService;
++
++    public PointAPI(DatabaseService databaseService, RedisService redisService) {
++        this.databaseService = databaseService;
++        this.redisService = redisService;
++    }
++
++    public DatabaseService getDatabaseService() {
++        return databaseService;
++    }
++
++    public RedisService getRedisService() {
++        return redisService;
++    }
++}
+diff --git a/src/main/java/ru/lewis/point/api/RedisService.java b/src/main/java/ru/lewis/point/api/RedisService.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..aa5a70881eba7a39561488d20d089ccb3fd4b7f5
+--- /dev/null
++++ b/src/main/java/ru/lewis/point/api/RedisService.java
+@@ -0,0 +1,10 @@
++package ru.lewis.point.api;
++
++import org.redisson.api.RedissonClient;
++
++import java.util.concurrent.CompletableFuture;
++
++public interface RedisService {
++    RedissonClient getClient();
++    CompletableFuture<Void> init();
++}

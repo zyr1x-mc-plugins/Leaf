@@ -18,9 +18,16 @@
  
  val apiAndDocs: Configuration by configurations.creating {
      attributes {
-@@ -41,16 +_,24 @@
+@@ -40,17 +_,31 @@
+ }
  
  dependencies {
++    api(libs.hibernate.hikari)
++    api(libs.hibernate.core)
++    api(libs.redisson)
++    api(libs.kryo)
++    api(libs.mariadb)
++
      // api dependencies are listed transitively to API consumers
 -    api("com.google.guava:guava:33.3.1-jre")
 +    // Leaf start - Bump Dependencies
