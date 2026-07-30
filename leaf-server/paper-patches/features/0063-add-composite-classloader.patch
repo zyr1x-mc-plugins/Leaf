@@ -1,0 +1,140 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: zyr1xx <nadejdinkostya@gmail.com>
+Date: Fri, 31 Jul 2026 01:49:03 +0300
+Subject: [PATCH] add: composite classloader
+
+
+diff --git a/src/main/java/org/bukkit/craftbukkit/Main.java b/src/main/java/org/bukkit/craftbukkit/Main.java
+index 748bd9650da4a209743b7a5dde584b2e19c5a578..b1090a497fea79ffb237380c30357fe5f683e4a6 100644
+--- a/src/main/java/org/bukkit/craftbukkit/Main.java
++++ b/src/main/java/org/bukkit/craftbukkit/Main.java
+@@ -10,6 +10,7 @@ import java.util.logging.Logger;
+ import joptsimple.OptionParser;
+ import joptsimple.OptionSet;
+ import joptsimple.util.PathConverter;
++import ru.lewis.point.api.PointAPI;
+ 
+ import static java.util.Arrays.asList;
+ 
+diff --git a/src/ru/lewis/point/CompositeClassLoader.java b/src/ru/lewis/point/CompositeClassLoader.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..51cf183e841e8497ed0b3c16f9a34dd4cd0bea02
+--- /dev/null
++++ b/src/ru/lewis/point/CompositeClassLoader.java
+@@ -0,0 +1,28 @@
++package ru.lewis.point;
++
++import java.util.List;
++
++public class CompositeClassLoader extends ClassLoader {
++
++    private final List<ClassLoader> classLoaders;
++
++    public CompositeClassLoader(
++        ClassLoader parent,
++        List<ClassLoader> classLoaders
++    ) {
++        super(parent);
++        this.classLoaders = classLoaders;
++    }
++
++    @Override
++    protected Class<?> findClass(String name) throws ClassNotFoundException {
++        for (ClassLoader classLoader : classLoaders) {
++            try {
++                return Class.forName(name, false, classLoader);
++            } catch (ClassNotFoundException ignored) {
++            }
++        }
++
++        throw new ClassNotFoundException(name);
++    }
++}
+diff --git a/src/ru/lewis/point/service/DatabaseServiceImpl.java b/src/ru/lewis/point/service/DatabaseServiceImpl.java
+index be575ba683c415962a1230cf7707c319daad2818..38c556e4b49d0c10e76da1469323348501ff3236 100644
+--- a/src/ru/lewis/point/service/DatabaseServiceImpl.java
++++ b/src/ru/lewis/point/service/DatabaseServiceImpl.java
+@@ -3,17 +3,17 @@ package ru.lewis.point.service;
+ import org.dreeam.leaf.config.modules.data.DataDatabase;
+ import org.hibernate.SessionFactory;
+ import org.mariadb.jdbc.Driver;
++import ru.lewis.point.CompositeClassLoader;
+ import ru.lewis.point.SessionFactoryBuilder;
+ import ru.lewis.point.api.DatabaseService;
+ 
+-import java.util.ArrayList;
+-import java.util.Arrays;
+-import java.util.List;
++import java.util.*;
+ import java.util.concurrent.CompletableFuture;
+ import java.util.concurrent.TimeUnit;
+ 
+ public class DatabaseServiceImpl implements DatabaseService {
+     private final List<Class<?>> entities = new ArrayList<>();
++    private final Set<ClassLoader> classLoaders = new HashSet<>();
+ 
+     private SessionFactory sessionFactory;
+ 
+@@ -25,12 +25,17 @@ public class DatabaseServiceImpl implements DatabaseService {
+     @Override
+     public DatabaseServiceImpl registerEntity(Class<?> entity) {
+         entities.add(entity);
++        this.classLoaders.add(entity.getClassLoader());
+         return this;
+     }
+ 
+     @Override
+-    public DatabaseServiceImpl registerEntities(Class<?>... entities) {
+-        this.entities.addAll(Arrays.asList(entities));
++    public DatabaseService registerEntities(Class<?>... entities) {
++        for (Class<?> entity : entities) {
++            this.entities.add(entity);
++            this.classLoaders.add(entity.getClassLoader());
++        }
++
+         return this;
+     }
+ 
+@@ -40,24 +45,39 @@ public class DatabaseServiceImpl implements DatabaseService {
+     }
+ 
+     private SessionFactory connect() {
++        CompositeClassLoader classLoader = new CompositeClassLoader(
++            this.getClass().getClassLoader(),
++            new ArrayList<>(classLoaders)
++        );
++
+         return SessionFactoryBuilder.build(builder -> {
+-            builder.setClassLoader(this.getClass().getClassLoader());
++            builder.setClassLoader(classLoader);
++
+             builder.setUser(DataDatabase.dataDatabaseUser);
+             builder.setPassword(DataDatabase.dataDatabasePassword);
+             builder.setDriver(Driver.class);
+-            builder.setUrl("jdbc:mariadb://" + DataDatabase.dataDatabaseAddress + "/" + DataDatabase.dataDatabaseDatabase + parametersToString(DataDatabase.dataDatabaseParameters));
++
++            builder.setUrl(
++                "jdbc:mariadb://" +
++                    DataDatabase.dataDatabaseAddress +
++                    "/" +
++                    DataDatabase.dataDatabaseDatabase +
++                    parametersToString(DataDatabase.dataDatabaseParameters)
++            );
+ 
+             builder.getHikariProperties().put(
+                 "maximumPoolSize",
+                 String.valueOf(Runtime.getRuntime().availableProcessors())
+             );
++
+             builder.getHikariProperties().put(
+                 "connectionTimeout",
+                 String.valueOf(TimeUnit.SECONDS.toMillis(10))
+             );
++
+             builder.getHikariProperties().put(
+                 "poolName",
+-                 "leaf/mariadb"
++                "leaf/mariadb"
+             );
+ 
+             for (Class<?> entity : entities) {
